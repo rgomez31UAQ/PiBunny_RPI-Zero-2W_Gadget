@@ -1,0 +1,14 @@
+#!/bin/bash
+
+read -r -p "Are you sure? [y/N] " confirm
+case "$confirm" in
+    [yY][eE][sS]|[yY])
+		echo -e "Performing reset. The system will now reboot.\nDO NOT UNPLUG BEFORE THIS HAS COMPLETED"
+		udisk reformat < /dev/null
+		echo "Reset complete. Rebooting."
+		reboot
+        ;;
+    *)
+        exit
+        ;;
+esac

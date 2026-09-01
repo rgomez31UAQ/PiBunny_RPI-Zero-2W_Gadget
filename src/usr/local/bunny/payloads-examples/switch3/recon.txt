@@ -1,0 +1,19 @@
+#!/bin/bash
+# PiBunny sample - switch3 "recon"
+# Collects only on-device info and stores it on the USB drive (loot/).
+# Never touches the plugged-in host's files.
+LED SETUP
+mkdir -p /root/udisk/loot
+{
+    echo "# systeminfo collected $(date -u +%FT%TZ)"
+    uname -a
+    echo "uptime: $(cut -d' ' -f1 /proc/uptime)s"
+    echo "-- interfaces --"
+    ip -4 addr show 2>/dev/null | grep -E '^[0-9]+:|inet ' || ifconfig 2>/dev/null
+} > /root/udisk/loot/systeminfo.txt
+chmod a+r /root/udisk/loot/systeminfo.txt 2>/dev/null
+LED R SINGLE
+sleep 1
+LED OFF
+LED FINISH
+exit 0

@@ -1,0 +1,5 @@
+#!/bin/sh
+# ExecStartPre marker for bunny-ui.service. systemd does NOT shell-parse
+# Exec* lines, so a redirect in the unit file breaks the service start
+# ("date: extra operand '>>'"). Writing the marker from a script avoids that.
+echo "ExecStartPre $(date +%s 2>/dev/null)" >> /var/log/bunny-ui-boot.txt

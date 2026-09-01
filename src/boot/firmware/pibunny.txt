@@ -1,0 +1,49 @@
+PIBUNNY - quick guide
+=====================
+
+WHAT YOU SEE ON THE LCD
+  ARASAKA red title            -> UI is up, keep going
+  4 colored chips (R/G/B/Y)    -> screen can show color
+  Pure black band + grey band  -> polarity reference
+
+  The panel is driven as the Waveshare ST7735S 128x128 HAT - the exact
+  same mode the Raspyjack tool uses on this screen.  It normally needs
+  no calibration.  Press down on the joystick -> pick "CAL" to tune.
+
+BLIND CONTROL (even if you cannot read the screen)
+  Menu always lands on row 1 (SW1).
+  Joystick UP/DOWN ......... move selection
+  Joystick LEFT/RIGHT ...... pick a payload for that switch
+  Top key (KEY1/K1) ........ RUN the highlighted payload
+  Middle key (KEY2/K2) ..... back / exit
+
+  CAL screen (joystick press on the "CAL" row):
+    JP / LEFT / DOWN .. next display variant
+    JL / UP ........... previous variant
+    K1 (top) .......... SAVE the shown variant (survives reboot)
+    K2 (middle) ....... leave with no save
+  Variant A (ST7735 DFLT) is the one that works on the 1.44"/ST7735 panel.
+  Variant D/E switch to the rarer ST7789 240x240 controller dialect.
+
+PAYLOADS
+  Drop payloads into the udisk (FAT, "BashBunny"):
+    payloads/switch1/payload.txt  (run on boot, first switch)
+    payloads/switch2/payload.txt
+    payloads/switch3/payload.txt
+  .menucfg maps each switch to the ducky script to offer in the menu
+  (see payloads-examples/ on the udisk for the stock files)
+
+STILL WHITE / GARBLED?
+  The driver now matches Raspyjack byte-for-byte (ST7735S, MADCTL 0x68,
+  no inversion, 128x128).  If the screen shows nothing at all:
+    1. Power off, pull the LCD HAT off, re-seat it firmly, flat.
+    2. Boot again; splash should appear ~6 s after power on.
+    3. Still dead?  On the CAL row press K1 to save variant A, reboot.
+  Anything it shows (even a wrong-colored grid) is progress - bring the
+  card back with /var/log/pibunny-ui.log on it.
+
+DOCTOR LOG
+  The UI writes /var/log/pibunny-ui.log (heartbeats every 5 s):
+  it records the panel type chosen, frame blit time and any crash.
+  A card with a full boot on it gives an exact picture of how far the
+  software got - hand it over after the next attempt.

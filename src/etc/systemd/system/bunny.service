@@ -1,0 +1,12 @@
+[Unit]
+Description=PiBunny boot framework (port of bash bunny bunny.service)
+After=network.target auditd.service bunny-ui.service
+Wants=bunny-ui.service
+
+[Service]
+Type=forking
+KillMode=process
+ExecStart=/usr/local/bunny/bin/bunny_framework
+
+[Install]
+WantedBy=multi-user.target

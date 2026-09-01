@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# PiBunny udisk helper -- mount/unmount/remount/reformat the loop-backed
+# udisk image (which is also what the STORAGE gadget exposes to the target).
+#
+UDISK_IMG="/opt/bunny/udisk.img"
+MOUNTPOINT="/root/udisk"
+
+function print_usage() {
+	echo "udisk [ mount | unmount | remount | reformat ]"
+}
+
+function get_confirmation() {
+	read -r -p "[?] Are you sure you want to reformat udisk? All files will be removed [y/N] " confirm
+	case "$confirm" in
+	    [yY][eE][sS]|[yY])
+	        return 0
+	        ;;
+	    *)
+	        return 1
+	        ;;
+	esac
+}
+
+function mount_udisk() {
+	mkdir -p "$MOUNTPOINT"
+	mountpoint -q "$MOUNTPOINT" && return 0
+	mount -o loop,sync,noatime "$UDISK_IMG" "$MOUNTPOINT"
+	return $?
+}
+
+function unmount_udisk() {
+	mountpoint -q "$MOUNTPOINT" || return 0
+	sync
+	umount "$MOUNTPOINT"
+	return $?
+}
+
+function reformat_udisk() {
+	mkdir -p /tmp/udisk_mkfs
+	dd if=/dev/zero of="$UDISK_IMG" bs=1M count=1 oflag=append conv=notrunc &>/dev/null
+	mkfs.vfat -F 32 -n "BashBunny" "$UDISK_IMG" &> /dev/null
+	mount_udisk && copy_files
+}
+
+function copy_files() {
+	mkdir -p /root/udisk/loot
+	mkdir -p /root/udisk/tools
+	cp /root/version.txt /root/udisk 2>/dev/null
+	cp -rn /opt/bunny/skeleton/* /root/udisk/ 2>/dev/null
+	chmod -R u+rwX /root/udisk/* &> /dev/null
+}
+
+function do_format() {
+	unmount_udisk && {
+		reformat_udisk
+		echo "[*] Udisk formatted successfully."
+	} || {
+		echo "[!] Error: Udisk is busy"
+	}
+}
+
+case $1 in
+	"mount")
+		mount_udisk && echo "[*] Udisk mounted to /root/udisk" || echo "[!] Error: Udisk could not be mounted"
+		;;
+	"unmount" | "umount")
+		unmount_udisk && echo "[*] Udisk unmounted" || echo "[!] Error: Udisk is busy, could not unmount"
+		;;
+	"remount")
+		unmount_udisk && (mount_udisk && echo "[*] Udisk re-mounted to /root/udisk") || echo "[!] Error: Udisk is busy, could not unmount"
+		;;
+	"reformat")
+		get_confirmation && do_format
+		;;
+	*)
+		print_usage
+		;;
+esac

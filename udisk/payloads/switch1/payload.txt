@@ -1,0 +1,45 @@
+#!/bin/bash
+# switch1 · NET RECON — enumerate the attached host over the USB ethernet.
+# PiBunny: USB gadget becomes RNDIS ethernet + the pi's DHCP (dnsmasq) hands
+# the host 192.168.1.x. Loot lands in loot/net_recon.txt (browse from LCD).
+LED SETUP
+ATTACKMODE RNDIS_ETHERNET
+GET TARGET_IP
+GET TARGET_HOSTNAME
+
+mkdir -p /root/udisk/loot
+OUT=/root/udisk/loot/net_recon.txt
+
+if [ -z "$TARGET_IP" ]; then
+    echo "[!] no DHCP lease from attached host (waited 20s)"
+    echo "[!] host did not take an address on usb0"
+    echo "### net recon $(date -u +%FT%TZ)" > "$OUT"
+    echo "target_ip=NO-LEASE" >> "$OUT"
+    LED R SINGLE
+    sleep 1
+    LED OFF
+    LED FINISH
+    exit 1
+fi
+
+echo "[+] target: ${TARGET_HOSTNAME:-unknown} @ $TARGET_IP"
+{
+    echo "### net recon $(date -u +%FT%TZ)"
+    echo "target_host=${TARGET_HOSTNAME:-unknown}"
+    echo "target_ip=$TARGET_IP"
+    echo "-- neighbours --"
+    ip neigh show dev usb0 2>/dev/null || ip neigh
+} > "$OUT"
+
+LED STAGE1
+echo "[*] tcp connect scan: $TARGET_IP (top ports)"
+for p in 22 80 443 445 3389 21 25 53 139 8080 8443 3306 5900; do
+    if timeout 1 bash -c "exec 3<>/dev/tcp/$TARGET_IP/$p" 2>/dev/null; then
+        echo "    open  $TARGET_IP:$p"
+        echo "open  $TARGET_IP:$p" >> "$OUT"
+    fi
+done
+echo "### done" >> "$OUT"
+chmod a+r "$OUT"
+LED FINISH
+exit 0

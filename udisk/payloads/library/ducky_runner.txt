@@ -1,0 +1,32 @@
+#!/bin/bash
+# ducky_runner - bring-your-own Duckyscript. Drop any duck.txt (Duckyscript)
+# at the root of the BashBunny drive, then run this: the pi re-enumerates as
+# a keyboard and types every line. The script is archived to loot/ afterwards
+# so it won't loop. Authorized tests only.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 3
+LED STAGE1
+mkdir -p /root/udisk/loot
+for i in $(seq 30); do
+    if [ -f /root/udisk/duck.txt ]; then
+        echo "[+] found duck.txt - injecting Duckyscript"
+        if [ ! -c /dev/hidg0 ]; then
+            echo "[!] /dev/hidg0 missing - no host attached"
+            break
+        fi
+        # QUACK resolves .txt paths relative to payloads/ (see lib QUACK)
+        QUACK "../duck.txt"
+        echo "[+] injection done"
+        mv /root/udisk/duck.txt \
+            "/root/udisk/loot/duck_run_$(date -u +%H%M%S).txt" 2>/dev/null
+        LED FINISH
+        exit 0
+    fi
+    sleep 1
+done
+echo "[!] no duck.txt found on the drive within 30s"
+LED B SINGLE; sleep 1
+LED OFF
+LED FINISH
+exit 1

@@ -1,0 +1,16 @@
+#!/bin/bash
+# PiBunny sample - switch2 "hid_demo"
+# Re-enumerates the Pi as a USB HID keyboard and types a benign string.
+# Payloads here are standard BashBunny format: DUCKY script via QUACK.
+LED SETUP
+ATTACKMODE HID
+sleep 1
+LED STAGE1
+if [ -c /dev/hidg0 ]; then
+    QUACK "REM pibunny hid demo" "STRING hello from pibunny" "ENTER"
+else
+    mkdir -p /root/udisk/loot
+    echo "[$(date -u +%FT%TZ)] switch2: /dev/hidg0 missing, HID skipped" >> /root/udisk/loot/run.log
+fi
+LED FINISH
+exit 0

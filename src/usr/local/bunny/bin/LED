@@ -1,0 +1,106 @@
+#!/bin/bash
+#
+# PiBunny LED -- same command language as stock bunny, but drives the
+# Waveshare LCD as the status LED through the bunny-ui daemon.
+#
+#   LED [COLOR] [PATTERN]   |   LED [STATE]
+#   LED Y SINGLE / LED M 500 / LED SETUP / LED STAGE2 / LED FAIL1 / LED OFF
+#
+# Writes a small JSON state to /run/bunny/led.state; the UI daemon animates it.
+# This process always returns immediately (animation runs in the daemon).
+
+STATE_DIR="/run/bunny"
+STATE_FILE="$STATE_DIR/led.state"
+
+mkdir -p "$STATE_DIR"
+
+red=0; green=0; blue=0
+ptype="solid"; pcount=1; pon=0; poff=0; pinv=0; prepeat=1
+
+parse_color() {
+	case $1 in
+		R) red=1; green=0; blue=0 ;;
+		G) red=0; green=1; blue=0 ;;
+		B) red=0; green=0; blue=1 ;;
+		Y) red=1; green=1; blue=0 ;;
+		C) red=0; green=1; blue=1 ;;
+		M) red=1; green=0; blue=1 ;;
+		W) red=1; green=1; blue=1 ;;
+		*) return 1 ;;
+	esac
+	return 0
+}
+
+parse_pattern() {
+	pin=0
+	[[ "$(echo $1 | head -c1)" == "I" ]] && pin=1
+	case $1 in
+		SOLID)                  ptype="solid"; pcount=1 ;;
+		SLOW)                   ptype="blink"; pon=1000; poff=1000 ;;
+		FAST)                   ptype="blink"; pon=100; poff=100 ;;
+		VERYFAST)               ptype="blink"; pon=10; poff=10 ;;
+		SINGLE|ISINGLE)         ptype="count"; pcount=1; pon=100; poff=1000; pinv=$pin ;;
+		DOUBLE|IDOUBLE)         ptype="count"; pcount=2; pon=100; poff=1000; pinv=$pin ;;
+		TRIPLE|ITRIPLE)         ptype="count"; pcount=3; pon=100; poff=1000; pinv=$pin ;;
+		QUAD|IQUAD)             ptype="count"; pcount=4; pon=100; poff=1000; pinv=$pin ;;
+		QUIN|IQUIN)             ptype="count"; pcount=5; pon=100; poff=1000; pinv=$pin ;;
+		SUCCESS)                ptype="success" ;;
+		*) [[ $1 =~ ^-?[0-9]+$ ]] && { ptype="blink"; pon=$1; poff=$1; } || ptype="solid" ;;
+	esac
+	return 0
+}
+
+parse_state() {
+	local STATENUM="1"
+	[[ $1 =~ ^[A-Z]+[1-5]$ ]] && STATENUM="${1: -1}"
+	case $1 in
+		SETUP)          parse_color M; ptype="solid" ;;
+		FAIL) parse_color R; ptype="blink"; pon=1000; poff=1000 ;;
+		FAIL1) parse_color R; ptype="blink"; pon=1000; poff=1000 ;;
+		FAIL2) parse_color R; ptype="blink"; pon=100; poff=100 ;;
+		FAIL3) parse_color R; ptype="blink"; pon=10; poff=10 ;; 
+		ATTACK|STAGE[1-5]) parse_color Y; ptype="count"; pcount=$STATENUM; pon=100; poff=1000 ;;
+		SPECIAL|SPECIAL[1-5]) parse_color C; ptype="count"; pcount=$STATENUM; pon=100; poff=1000; pinv=1 ;;
+		CLEANUP)        parse_color W; ptype="blink"; pon=100; poff=100 ;;
+		FINISH)         parse_color G; ptype="success" ;;
+		OFF)            ptype="off" ;;
+		*) return 1 ;;
+	esac
+	return 0
+}
+
+run_led() {
+	parse_state "$1" || {
+		parse_color "$1" || return 1
+		[[ "$#" == "2" ]] && parse_pattern "$2"
+	}
+}
+
+# set a default so unparsed stays harmless
+run_led "$@" || { ptype="off"; }
+
+python3 - "$STATE_FILE" "$red" "$green" "$blue" "$ptype" "$pcount" "$pon" "$poff" "$pinv" <<'PYEOF'
+import json, os, sys
+
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        cur = json.load(f)
+    seq = int(cur.get("seq", 0)) + 1
+except Exception:
+    seq = 1
+state = {
+    "seq": seq,
+    "color": tuple(int(v) * 255 for v in (sys.argv[2], sys.argv[3], sys.argv[4])),
+    "pattern": sys.argv[5],
+    "count": int(sys.argv[6]),
+    "on_ms": int(sys.argv[7]),
+    "off_ms": int(sys.argv[8]),
+    "invert": int(sys.argv[9]),
+}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(state, f)
+os.replace(tmp, path)
+PYEOF
+exit 0

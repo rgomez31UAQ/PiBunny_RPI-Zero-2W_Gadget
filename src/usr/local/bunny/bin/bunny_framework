@@ -1,0 +1,221 @@
+#!/bin/bash
+#
+# PiBunny boot framework (port of Hak5 bin/bunny_framework).
+# - mounts the loop-backed udisk, reads the physical switch (the Waveshare
+#   keys / joystick), and runs the selected payload.
+# - publishes status to the bunny-UI daemon via /run/bunny
+#
+export PATH=$PATH:/usr/local/bunny/bin:/tools
+
+BUNNY_RUN="/run/bunny"
+UDISK_IMG="/opt/bunny/udisk.img"
+MOUNTPOINT="/root/udisk"
+INPUT_FIFO="$BUNNY_RUN/input.fifo"
+
+mkdir -p "$BUNNY_RUN"
+
+# --- UI status helpers ------------------------------------------------------
+info() { echo -n "$*" > "$BUNNY_RUN/info"; }
+
+# --- hardware-independent init ----------------------------------------------
+function reset_bootcount() {
+	# no vfat boot partition on the Pi; nothing to do.
+	info "resetting bootcount"
+}
+
+function init_bt() {
+	# No BT AT-module on the Pi; WiFi/BT on-board. Stub kept for compatibility
+	# with stock payloads that call init_bt indirectly.
+	:
+}
+
+function init_bunny() {
+	reset_bootcount
+	echo ondemand | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor &> /dev/null
+	dmesg -c > /dev/null
+}
+
+# --- udisk (loop image, shared with the STORAGE gadget) ---------------------
+function mount_udisk() {
+	mkdir -p "$MOUNTPOINT"
+	mountpoint -q "$MOUNTPOINT" && return 0
+	mount -o loop,sync,noatime "$UDISK_IMG" "$MOUNTPOINT" 2>/dev/null
+}
+
+function unmount_udisk() {
+	sync
+	mountpoint -q "$MOUNTPOINT" && umount "$MOUNTPOINT" 2>/dev/null
+	return 0
+}
+
+function update_languages() {
+	mkdir -p /root/udisk/languages
+	cp /root/udisk/languages/*.json /usr/local/bunny/lib/languages/ 2>/dev/null
+}
+
+function install_tools() {
+	mkdir -p /tools
+	mkdir -p /root/udisk/tools
+	dpkg -i /root/udisk/tools/*.deb &> /tmp/dpkg_log
+	rm -rf /root/udisk/tools/*.deb
+	cp -rf /root/udisk/tools/* /tools/ &> /dev/null
+	rm -rf /root/udisk/tools/*
+	[[ -f /tools/install.sh ]] && {
+		bash /tools/install.sh
+		rm /tools/install.sh
+	}
+	sync
+}
+
+# --- switch / input ----------------------------------------------------------
+# The Waveshare 1.3" LCD HAT provides KEY1/KEY2/KEY3 and a 5-way joystick.
+# Events are published by the bunny-UI daemon to $INPUT_FIFO:
+#   K1 K2 K3  = the three physical keys
+#   JU JD JL JR JP = joystick up/down/left/right/press
+#
+# KEY1 -> switch1, KEY2 -> switch2, KEY3 -> switch3 (pad mode)
+# Joystick press -> UI payload-select menu
+#
+function read_event() {
+	# $1 = timeout seconds. Reads one line from the fifo with timeout.
+	timeout "$1" cat "$INPUT_FIFO" 2>/dev/null
+}
+
+function check_switch() {
+	# $1 = first | idle. first: long timeout + resume .lastswitch on nothing
+	# pressed. idle: short timeout, no auto-run (returns "" instead).
+	# The UI is the single point of selection: it asks the framework for a
+	# payload via menu.result, or tells it to RUN the highlighted row directly.
+	#   switchN / arming -> run that
+	#   none             -> back / nothing selected -> keep waiting
+	local mode="${1:-idle}"
+	info "SELECT SWITCH: JOY MOVE, K3 OK, K2 BACK"
+	local deadline=$((SECONDS + 600))
+	[ "$mode" = "idle" ] && deadline=$((SECONDS + 30))
+	while [ $SECONDS -lt $deadline ]; do
+		# the UI can inject a payload choice at any time from the list
+		if [ -f "$BUNNY_RUN/menu.result" ]; then
+			local sel
+			sel=$(cat "$BUNNY_RUN/menu.result")
+			rm -f "$BUNNY_RUN/menu.result"
+			case "$sel" in
+				switch[1-9] | switch1[0-9] | arming)
+					echo "$sel"
+					return ;;
+			esac
+		fi
+		sleep 0.25
+	done
+	# nothing pressed: on first boot resume last used switch if any, else not
+	# running anything (the UI shows the list and waits for the user).
+	if [ "$mode" = "first" ]; then
+		[[ -f /root/udisk/.lastswitch ]] && cat /root/udisk/.lastswitch && return
+	fi
+	echo ""
+}
+
+# --- payload helpers ---------------------------------------------------------
+function get_payload_file() {
+	# $1 = switch name (switch1..3). .menucfg overrides default payload.txt,
+	# and may reference a shared payload under payloads/library/.
+	local sw="$1"
+	local cfg=""
+	[[ -f /root/udisk/.menucfg ]] && cfg=$(grep "^$sw " /root/udisk/.menucfg | awk '{print $2}')
+	cfg="${cfg:-payload.txt}"
+	case "$cfg" in
+		library/*)
+			[[ -f "/root/udisk/payloads/$cfg" ]] && echo "/root/udisk/payloads/$cfg" && return 0
+			;;
+		*)
+			[[ -f "/root/udisk/payloads/$sw/$cfg" ]] && echo "/root/udisk/payloads/$sw/$cfg" && return 0
+			;;
+	esac
+	[[ -f "/root/udisk/payloads/$sw/payload.txt" ]] && echo "/root/udisk/payloads/$sw/payload.txt"
+}
+
+function install_payload() {
+	local install_file="/root/udisk/payloads/${1}/install.sh"
+	[[ -f $install_file ]] && {
+		LED SETUP
+		cp "$install_file" /tmp/install_payload.sh
+		sed -i 's/\r//g' /tmp/install_payload.sh
+		bash -c "/tmp/install_payload.sh"
+		[[ "$?" == "0" ]] && {
+			mv "$install_file" "${install_file}.INSTALLED"
+			sync
+		}
+		LED OFF
+		rm /tmp/install_payload.sh
+	}
+}
+
+function run_payload() {
+	local payload
+	payload=$(get_payload_file $1)
+	[[ -n "$payload" && -f $payload ]] && {
+		cp "$payload" /tmp/payload.sh
+		sed -i 's/\r//g' /tmp/payload.sh
+
+		export SWITCH_POSITION=$1
+		echo "$1" > /run/bunny/switch
+		echo "$1" > /root/udisk/.lastswitch
+		info "RUNNING $SWITCH_POSITION :: $(basename $payload)"
+
+		echo "+---- $SWITCH_POSITION :: $(basename $payload) ----" > "$BUNNY_RUN/out.log"
+
+		for f in /root/udisk/payloads/extensions/*; do
+			[ -f "$f" ] && source "$f"
+		done
+		[[ -f /root/udisk/config.txt ]] && source <(sed 's/\r//g' /root/udisk/config.txt)
+		PATH=$PATH bash -c '/tmp/payload.sh' 2>&1 | tr -d '\r' | tee -a "$BUNNY_RUN/out.log"
+		return 0
+	}
+	return 1
+}
+
+# --- boot flow ---------------------------------------------------------------
+# hop loops forever: run the picked payload, then re-arm the switch selector so
+# the UI can launch (and re-run) any payload from the library.
+function hop() {
+	init_bunny
+	mount_udisk
+	init_bt
+
+	rm -f "$BUNNY_RUN/menu.result" "$BUNNY_RUN/menu.ask"
+
+	local first=1
+	while true; do
+		mount_udisk
+		local switch
+		if [ $first -eq 1 ]; then
+			switch=$(check_switch first)
+			first=0
+		else
+			switch=$(check_switch idle)
+		fi
+		rm -f "$BUNNY_RUN/menu.ask" "$BUNNY_RUN/menu.result"
+
+		[ -z "$switch" ] && continue
+
+		case $switch in
+			"arming")
+				LED SETUP
+				update_languages
+				install_tools
+				LED B SLOW
+				sleep 1
+				run_payload "arming" || /bin/bash -c "ATTACKMODE SERIAL STORAGE"
+				;;
+			*)
+				install_payload "$switch"
+				run_payload "$switch"
+				;;
+		esac
+
+		unmount_udisk
+		sync
+	done
+}
+
+hop &
+exit 0

@@ -1,0 +1,5 @@
+# PiBunny default usb0 config (rewritten by ATTACKMODE when ethernet armed)
+auto usb0
+iface usb0 inet static
+    address 192.168.1.1
+    netmask 255.255.255.0

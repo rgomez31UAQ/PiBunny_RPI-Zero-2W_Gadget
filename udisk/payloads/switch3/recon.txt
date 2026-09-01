@@ -1,0 +1,37 @@
+#!/bin/bash
+# switch3 · SYS RECON — on-device (and attached-host) recon into loot/.
+# Runs with just a power cable: the pi gathers its own state, plus any USB
+# ethernet neighbours, and drops a timestamped report into loot/.
+LED SETUP
+mkdir -p /root/udisk/loot
+OUT=/root/udisk/loot/recon_$(date -u +%Y%m%dT%H%M%SZ).txt
+{
+    echo "### sys recon collected $(date -u +%FT%TZ)"
+    echo "-- kernel --"
+    uname -a
+    echo "-- uptime --"
+    uptime
+    echo "-- memory --"
+    grep -E 'MemTotal|MemFree|MemAvailable' /proc/meminfo
+    echo "-- interfaces --"
+    ip -4 addr show 2>/dev/null | grep -E '^[0-9]+:|inet '
+    echo "-- neighbours (attached host) --"
+    ip neigh 2>/dev/null
+    echo "-- listeners --"
+    if command -v ss >/dev/null 2>&1; then ss -tuln 2>/dev/null
+    elif command -v netstat >/dev/null 2>&1; then netstat -tuln 2>/dev/null
+    else echo "n/a"; fi
+    echo "-- top cpu --"
+    ps -eo pid,%cpu,comm --sort=-%cpu 2>/dev/null | head -n 6
+    echo "-- board --"
+    grep -E '^Model|^Hardware|^Revision' /proc/cpuinfo 2>/dev/null
+    [ -r /sys/class/thermal/thermal_zone0/temp ] && \
+        echo "temp: $(awk '{print $1/1000}' /sys/class/thermal/thermal_zone0/temp)C"
+} > "$OUT" 2>&1
+chmod a+r "$OUT"
+echo "[+] saved $(basename "$OUT") ($(wc -l < "$OUT") lines) -> loot/"
+LED R SINGLE
+sleep 1
+LED OFF
+LED FINISH
+exit 0

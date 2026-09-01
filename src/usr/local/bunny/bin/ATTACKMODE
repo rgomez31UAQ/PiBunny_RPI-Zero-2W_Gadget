@@ -1,0 +1,240 @@
+#!/bin/bash
+#
+# PiBunny ATTACKMODE (port of the Hak5 Bash Bunny script).
+#
+# Same interface as stock bunny, implemented with configfs on the Pi's
+# dwc2 controller instead of the sunxi bunny_gadget.ko module.
+#
+#   ATTACKMODE HID
+#   ATTACKMODE HID STORAGE RNDIS_ETHERNET
+#   ATTACKMODE SERIAL STORAGE          (arming)
+#   ... plus VID_/PID_/SN_/MAN_/RNDIS_SPEED_/ETHERNET_TIMEOUT_ overrides.
+
+VID_DEFAULT="0xF000"
+PID_DEFAULT="0xFEFF"
+
+PID_SETUP_MODE="0xFFF0"
+PID_HID_ONLY="0xFF01"
+PID_HID_STORAGE="0xFF02"
+PID_HID_RNDIS="0xFF03"
+PID_HID_ECM="0xFF04"
+PID_HID_STORAGE_RNDIS="0xFF05"
+PID_HID_STORAGE_ECM="0xFF06"
+PID_SERIAL_RNDIS="0xFF07"
+PID_SERIAL_ECM="0xFF08"
+PID_STORAGE_ONLY="0xFF10"
+PID_SERIAL_ONLY="0xFF11"
+VID_RNDIS_ONLY="0x04b3"
+PID_RNDIS_ONLY="0x4010"
+PID_ECM_ONLY="0xFF13"
+PID_HID_SERIAL="0xFF14"
+PID_STORAGE_RNDIS="0xFF20"
+PID_STORAGE_ECM="0xFF21"
+
+SERIALNUMBER="ch000001"
+HOST_ADDR="00:11:22:33:44:55"
+DEV_ADDR="5a:00:00:5a:5a:00"
+MASS_FILE="/opt/bunny/udisk.img"   # loop image, mounted at /root/udisk
+ARM_PY="/usr/local/bunny/lib/gadget/arm.py"
+
+usage() {
+	cat <<EOF
+Usage: ATTACKMODE <mode1> [mode2] [mode3]
+  ATTACKMODE ARMING
+  ATTACKMODE HID | STORAGE | SERIAL | RNDIS_ETHERNET | ECM_ETHERNET | AUTO_ETHERNET
+  combinations: HID SERIAL, HID STORAGE, HID RNDIS_ETHERNET, HID STORAGE RNDIS_ETHERNET, ...
+  overrides: VID_0x1234 PID_0x5678 SN_serial MAN_manufacturer RNDIS_SPEED_100 ETHERNET_TIMEOUT_30
+  ATTACKMODE OFF
+EOF
+	exit 1
+}
+
+[ "x$1" = "x" ] && usage
+
+# ---------------------------------------------------------------------------
+# Parse modes (same combos as stock bunny)
+# ---------------------------------------------------------------------------
+has_hid=""
+has_storage=""
+has_rostorage=""
+has_net=""
+is_win=""
+is_auto=""
+has_serial=""
+str_vid_custom=""
+str_pid_custom=""
+str_sn_custom=""
+str_man_custom=""
+str_speed_custom=""
+str_timeout_custom=""
+
+parse_mode() {
+	case $1 in
+		ARMING)        has_storage=1; has_serial=1 ;;
+		HID)           has_hid=1 ;;
+		STORAGE)       has_storage=1 ;;
+		RO_STORAGE)    has_storage=1; has_rostorage=1 ;;
+		RNDIS_ETHERNET) has_net=1; is_win=1 ;;
+		ECM_ETHERNET)  has_net=1; is_win= ;;
+		AUTO_ETHERNET) has_net=1; is_auto=1; is_win= ;;
+		SERIAL)        has_serial=1 ;;
+		OFF)           /usr/local/bunny/lib/gadget/arm.py --off; exit 0 ;;
+		VID_*)         str_vid_custom=${1#VID_} ;;
+		PID_*)         str_pid_custom=${1#PID_} ;;
+		SN_*)          str_sn_custom=${1#SN_} ;;
+		MAN_*)         str_man_custom=${1#MAN_} ;;
+		RNDIS_SPEED_*) str_speed_custom=${1#RNDIS_SPEED_} ;;
+		ETHERNET_TIMEOUT_*) str_timeout_custom=${1#ETHERNET_TIMEOUT_} ;;
+	esac
+}
+
+CMD="$0 $@"
+for arg in "$@"; do
+	parse_mode $(echo "$arg" | awk '{print toupper($0)}')
+done
+
+# ---------------------------------------------------------------------------
+# Build the arm.py parameter list (equivalent of bunny_gadget module params)
+# ---------------------------------------------------------------------------
+mod=""
+[ "x$has_hid" = "x1" ] && mod="$mod --hid"
+[ "x$has_storage" = "x1" ] && mod="$mod --storage"
+[ "x$has_rostorage" = "x1" ] && mod="$mod --ro"
+[ "x$has_net" = "x1" ] && {
+	if [ "x$is_win" = "x1" ]; then
+		mod="$mod --rndis"
+	else
+		mod="$mod --ecm"
+	fi
+}
+[ "x$has_serial" = "x1" ] && mod="$mod --serial"
+
+# PID selection - keep the exact stock mapping
+pid=""
+vid_mode="$VID_DEFAULT"
+if [ "x$has_hid" != "x1" ] && [ "x$has_storage" = "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" = "x1" ]; then
+	pid=$PID_SETUP_MODE
+elif [ "x$has_hid" = "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" != "x1" ]; then
+	pid=$PID_HID_ONLY
+elif [ "x$has_hid" != "x1" ] && [ "x$has_storage" = "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" != "x1" ]; then
+	pid=$PID_STORAGE_ONLY
+elif [ "x$has_hid" != "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" = "x1" ]; then
+	pid=$PID_SERIAL_ONLY
+elif [ "x$has_hid" != "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" = "x1" ] && [ "x$has_serial" != "x1" ]; then
+	if [ "x$is_win" = "x1" ]; then
+		vid_mode=$VID_RNDIS_ONLY
+		pid=$PID_RNDIS_ONLY
+	else
+		pid=$PID_ECM_ONLY
+	fi
+elif [ "x$has_hid" = "x1" ] && [ "x$has_storage" = "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" != "x1" ]; then
+	pid=$PID_HID_STORAGE
+elif [ "x$has_hid" = "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" != "x1" ] && [ "x$has_serial" = "x1" ]; then
+	pid=$PID_HID_SERIAL
+elif [ "x$has_hid" = "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" = "x1" ] && [ "x$has_serial" != "x1" ]; then
+	[ "x$is_win" = "x1" ] && pid=$PID_HID_RNDIS || pid=$PID_HID_ECM
+elif [ "x$has_hid" = "x1" ] && [ "x$has_storage" = "x1" ] && [ "x$has_net" = "x1" ] && [ "x$has_serial" != "x1" ]; then
+	[ "x$is_win" = "x1" ] && pid=$PID_HID_STORAGE_RNDIS || pid=$PID_HID_STORAGE_ECM
+elif [ "x$has_hid" != "x1" ] && [ "x$has_storage" != "x1" ] && [ "x$has_net" = "x1" ] && [ "x$has_serial" = "x1" ]; then
+	[ "x$is_win" = "x1" ] && pid=$PID_SERIAL_RNDIS || pid=$PID_SERIAL_ECM
+elif [ "x$has_hid" != "x1" ] && [ "x$has_storage" = "x1" ] && [ "x$has_net" = "x1" ] && [ "x$has_serial" != "x1" ]; then
+	[ "x$is_win" = "x1" ] && pid=$PID_STORAGE_RNDIS || pid=$PID_STORAGE_ECM
+else
+	pid=$PID_DEFAULT
+fi
+
+[ -n "$pid" ] && mod="$mod --pid $pid"
+mod="$mod --vid $vid_mode"
+
+# custom overrides
+[ -n "$str_vid_custom" ] && mod="$mod --vid $str_vid_custom"
+[ -n "$str_pid_custom" ] && mod="$mod --pid $str_pid_custom"
+[ -n "$str_man_custom" ] && mod="$mod --man $str_man_custom"
+[ -n "$str_sn_custom" ] && mod="$mod --sn $str_sn_custom"
+[ -n "$str_speed_custom" ] && {
+	[[ $str_speed_custom =~ ^[0-9]+$ ]] && [ $str_speed_custom -gt 0 ] && {
+		[ $str_speed_custom -gt 4294967 ] && str_speed_custom=4294967
+		mod="$mod --rndis_speed $((str_speed_custom*1000))"
+	}
+}
+mod="$mod --sn ${str_sn_custom:-$SERIALNUMBER}"
+mod="$mod --host_addr $HOST_ADDR --dev_addr $DEV_ADDR"
+mod="$mod --storage-file $MASS_FILE"
+
+# ---------------------------------------------------------------------------
+# Load the gadget
+# ---------------------------------------------------------------------------
+modprobe libcomposite 2>/dev/null || true
+python3 $ARM_PY $mod
+if [ $? -ne 0 ]; then
+	echo "[!] ATTACKMODE: arm.py failed ($mod)" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Post-load: networking (DHCP for TARGET_IP), serial getty, driver-wait
+# ---------------------------------------------------------------------------
+rm -f /var/lib/misc/dnsmasq.leases
+
+if [ "x$has_net" = "x1" ]; then
+	# usb0 (RNDIS or ECM net device); also keep a copy for GET HOST_IP
+	cat > /etc/network/interfaces.d/usb0 <<EOF
+auto usb0
+iface usb0 inet static
+    address 192.168.1.1
+    netmask 255.255.255.0
+EOF
+	# the usb0 netdev appears when the gadget binds to the UDC; poll briefly
+	for i in $(seq 10); do
+		[ -d /sys/class/net/usb0 ] && break
+		sleep 0.5
+	done
+	ip addr flush dev usb0 2>/dev/null
+	ip addr add 192.168.1.1/24 dev usb0 2>/dev/null
+	ip link set usb0 up
+	sleep 1
+
+	# dnsmasq hands the target a 192.168.1.x address and logs it
+	cat > /etc/dnsmasq.d/pibunny.conf <<EOF
+interface=usb0
+bind-interfaces
+dhcp-range=192.168.1.2,192.168.1.100,255.255.255.0,24h
+dhcp-option=option:router,192.168.1.1
+dhcp-option=option:dns-server,192.168.1.1
+dhcp-leasefile=/var/lib/misc/dnsmasq.leases
+EOF
+	systemctl start dnsmasq 2>/dev/null
+
+	# wait for a DHCP lease from the target
+	timeout=20
+	[[ "x$str_timeout_custom" != "x" ]] && [[ "x$is_auto" = "x1" ]] && timeout=$str_timeout_custom
+	TARGET_IP=""
+	TARGET_HOSTNAME=""
+	for i in $(seq $timeout); do
+		TARGET_IP=$(awk '{print $3}' /var/lib/misc/dnsmasq.leases 2>/dev/null | sort -u | paste -sd,)
+		TARGET_HOSTNAME=$(awk '{print $4}' /var/lib/misc/dnsmasq.leases 2>/dev/null \
+			| sort -u | tail -n1 | tr -d '"')
+		[ "x$TARGET_IP" != "x" ] && {
+			echo "got dhcp ip address after $i seconds"
+			break
+		}
+		sleep 1
+	done
+
+	[[ "x$is_auto" = "x1" ]] && [ "x$TARGET_IP" = "x" ] && {
+		$(echo $CMD | sed 's/AUTO_ETHERNET/RNDIS_ETHERNET/gI')
+		exit
+	}
+	echo "TARGET_IP=$TARGET_IP TARGET_HOSTNAME=$TARGET_HOSTNAME HOST_IP=192.168.1.1"
+fi
+
+if [ "x$has_serial" = "x1" ]; then
+	# only start a getty once the acm gadget actually created the tty node
+	[ -e /dev/ttyGS0 ] && systemctl start serial-getty@ttyGS0.service 2>/dev/null
+fi
+
+if [ "x$has_net" = "x1" ]; then
+	exit 0
+fi
+sleep 2
+exit 0

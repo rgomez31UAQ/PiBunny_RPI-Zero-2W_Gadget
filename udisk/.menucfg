@@ -1,0 +1,16 @@
+switch1 library/net_recon.txt
+switch2 library/hid_pwn.txt
+switch3 library/sys_recon.txt
+switch4 library/wifi_grab.txt
+switch5 library/cred_recon.txt
+switch6 library/browser_grab.txt
+switch7 library/keylogger.txt
+switch8 library/hunter.txt
+switch9 library/ducky_runner.txt
+switch10 library/hak5_defeat_defender.txt
+switch11 library/hak5_wifi_post.txt
+switch12 library/hak5_discord_exfil.txt
+switch13 library/hak5_canary_duck.txt
+switch14 library/hak5_performant_win.txt
+switch15 library/hak5_mac_ip.txt
+switch16 library/hid_test.txt

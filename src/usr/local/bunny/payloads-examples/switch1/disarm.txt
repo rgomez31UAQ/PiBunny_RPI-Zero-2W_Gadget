@@ -1,0 +1,13 @@
+#!/bin/bash
+# PiBunny sample - switch1 "disarm"
+# Benign: proves the LED/LCD status pipeline and loot capture.
+# No HID injection, no network activity.
+LED SETUP
+sleep 1
+mkdir -p /root/udisk/loot
+echo "[$(date -u +%FT%TZ)] switch1 disarm demo ran on $(hostname)" >> /root/udisk/loot/run.log
+LED B SLOW
+sleep 2
+LED OFF
+LED FINISH
+exit 0

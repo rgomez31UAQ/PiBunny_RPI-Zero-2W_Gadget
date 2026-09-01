@@ -1,0 +1,12 @@
+#!/bin/bash
+# arming · SETUP — the pi presents as SERIAL+STORAGE (composite gadget) so the
+# operator can reach the shell over serial (ttyGS0) and read/write payloads +
+# loot on the mounted "BashBunny" drive at /root/udisk.
+echo "ARMING MODE"
+echo "serial : ttyGS0 (root shell)"
+echo "drive  : /root/udisk (BashBunny)"
+echo "switches: payloads/switch{1,2,3}/"
+echo "loot   : loot/"
+echo "-- idle --"
+sleep 3
+exit 0

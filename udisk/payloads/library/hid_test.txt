@@ -1,0 +1,32 @@
+#!/bin/bash
+# switch16 · HID TEST — pure USB keyboard enumeration test for Linux/Win/Mac.
+# Presents ONLY a HID keyboard (no storage/ethernet) and types a banner so you
+# can confirm the Pi is seen as a keyboard on any host OS.
+LED SETUP
+ATTACKMODE HID
+LED STAGE1
+
+if [ ! -c /dev/hidg0 ]; then
+    echo "[*] waiting for HID gadget to enumerate..."
+    for i in $(seq 1 100); do
+        [ -c /dev/hidg0 ] && break
+        sleep 0.1
+    done
+fi
+if [ ! -c /dev/hidg0 ]; then
+    echo "[!] /dev/hidg0 missing - HID gadget not armed"
+    LED R SINGLE
+    sleep 1
+    LED OFF
+    LED FINISH
+    exit 1
+fi
+
+# Type into whatever is focused on the host (Notepad/TextEdit/gedit/terminal).
+QUACK "DEFAULT_DELAY 40" \
+    "REM PiBunny HID test - if you can read this the Pi enumerates as a USB keyboard" \
+    "STRING PIBUNNY HID OK - Linux/Windows/macOS" "ENTER"
+
+echo "[$(date -u +%FT%TZ)] switch16 hid_test ran" >> /root/udisk/loot/run.log
+LED FINISH
+exit 0

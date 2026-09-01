@@ -1,0 +1,723 @@
+#!/usr/bin/env python3
+"""PiBunny QUACK engine — Duckyscript 1.0–3.0 compatible.
+
+Supports: STRING, STRINGLN, DELAY, DEFAULT_DELAY/DEFAULTDELAY, REPEAT/REPLAY,
+  GUI/CTRL/ALT/SHIFT/MENU/TAB and combo keys, F1-F12, arrows, CAPSLOCK,
+  NUMLOCK, SCROLLLOCK, INSERT, DELETE, HOME, END, PAGEUP, PAGEDOWN,
+  SPACE, BREAK, PAUSE, PRINTSCREEN, LOCK/UNLOCK, ALTCODE, KEYCODE,
+  LED, ATTACKMODE, REM, DEFINE, VAR/CONST, IF/ELIF/ELSE/END_IF,
+  WHILE/END_WHILE/BREAK/CONTINUE, FUNCTION/END_FUNCTION/CALL/RETURN,
+  DEFAULTLED, WAIT_FOR_BUTTON_PRESS, STOP_PAYLOAD, HIDE_PAYLOAD,
+  EXTENSION/END_EXTENSION, IF_DEFINED_TRUE, DELAY_IF_DEFINED,
+  SAVE_HOST_KEYBOARD_LOCK_STATE, RESTORE_HOST_KEYBOARD_LOCK_STATE,
+  INJECT_MOD, RELEASE_MOD, EXFIL, $_RANDOM_INT, $_RANDOM_BASE64,
+  $_CAPSLOCK_ON, $_NUMLOCK_ON, $_SCROLLLOCK_ON, $_OS, $_ITERATION_NUMBER.
+"""
+
+import os
+import sys
+import time
+import json
+import random
+import base64
+import re
+
+__description__ = 'Program to run Duckyscript (DS1–DS3)'
+__author__ = 'Hak5 / PiBunny'
+__version__ = '3.0'
+__date__ = '2026-08-31'
+
+LANG_DIR = "/usr/local/bunny/lib/languages"
+NUMPAD_CODES = [98, 89, 90, 91, 92, 93, 94, 95, 96, 97]
+
+
+# ---------------------------------------------------------------------------
+# HID helpers
+# ---------------------------------------------------------------------------
+
+HID_DEV = "/dev/hidg0"
+_hid_ready = False
+
+
+def hidg_write(elements, release=True):
+    global _hid_ready
+    if not _hid_ready:
+        # The gadget (and host enumeration) can lag behind `ATTACKMODE` / the
+        # payload run. Block until /dev/hidg0 is writable so the very first
+        # keystrokes aren't dropped (which showed as "nothing happens").
+        for _ in range(100):
+            if os.path.exists(HID_DEV) and os.access(HID_DEV, os.W_OK):
+                try:
+                    with open(HID_DEV, "wb") as probe:
+                        probe.write(bytearray([0, 0, 0, 0, 0, 0, 0, 0]))
+                    _hid_ready = True
+                    break
+                except OSError:
+                    pass
+            time.sleep(0.05)
+        if not _hid_ready:
+            print("[!] QUACK: /dev/hidg0 not available", file=sys.stderr)
+    with open(HID_DEV, "wb") as hidg:
+        hidg.write(bytearray(elements))
+        if release:
+            hidg.write(bytearray([0, 0, 0, 0, 0, 0, 0, 0]))
+
+
+def write_altcode(code):
+    numlock = False
+    hidg_write([0, 0, 83, 0, 0, 0, 0, 0])
+    hidg_write([0, 0, 83, 0, 0, 0, 0, 0])
+    with open("/tmp/hid_out", mode='r') as f:
+        out = f.read(2)
+        while not out:
+            out = f.read(2)
+        numlock = (int(out, 16) & 0b00001) == 0b00001
+    if not numlock:
+        hidg_write([0, 0, 83, 0, 0, 0, 0, 0])
+    for i in code:
+        hidg_write([4, 0, NUMPAD_CODES[int(i)], 0, 0, 0, 0, 0], release=False)
+        hidg_write([4, 0, 0, 0, 0, 0, 0, 0], release=False)
+    hidg_write([0, 0, 0, 0, 0, 0, 0, 0], release=False)
+    if not numlock:
+        hidg_write([0, 0, 83, 0, 0, 0, 0, 0])
+
+
+# ---------------------------------------------------------------------------
+# DuckyVM — full Duckyscript execution engine
+# ---------------------------------------------------------------------------
+
+class DuckyVM:
+
+    def __init__(self, lang_file):
+        self.lang = lang_file
+        self.vars = {}
+        self.defines = {}
+        self.functions = {}
+        self.extensions = {}
+        self.default_delay = 0
+        self.last_cmd = ''
+        self.last_instruction = ''
+        self.running = True
+        self.if_stack = []
+        self.while_stack = []
+        self.call_stack = []
+        self._capslock = False
+        self._numlock = False
+        self._scrolllock = False
+        self._iteration = 0
+        self._jump_to = None
+        self._break_pending = False
+
+    # -- substitution -------------------------------------------------------
+
+    def substitute(self, line):
+        for name, value in self.defines.items():
+            line = line.replace('$(' + name + ')', value)
+            line = line.replace('%' + name + '%', value)
+        for name, value in self.vars.items():
+            line = line.replace('$(' + name + ')', str(value))
+            line = line.replace('%' + name + '%', str(value))
+        line = line.replace('$_ITERATION_NUMBER', str(self._iteration))
+        line = line.replace('$_CAPSLOCK_ON', '1' if self._capslock else '0')
+        line = line.replace('$_NUMLOCK_ON', '1' if self._numlock else '0')
+        line = line.replace('$_SCROLLLOCK_ON', '1' if self._scrolllock else '0')
+        line = line.replace('$_OS', '"WINDOWS"')
+        m = re.search(r'\$_RANDOM_INT\s+(\d+)\s+(\d+)', line)
+        if m:
+            line = line.replace(m.group(0), str(random.randint(int(m.group(1)), int(m.group(2)))))
+        m = re.search(r'\$_RANDOM_BASE64\s+(\d+)', line)
+        if m:
+            line = line.replace(m.group(0), base64.b64encode(os.urandom(int(m.group(1)))).decode())
+        return line
+
+    # -- value resolution / arithmetic --------------------------------------
+
+    def _resolve(self, expr):
+        expr = expr.strip()
+        if expr.startswith('$(') and expr.endswith(')'):
+            return str(self.vars.get(expr[2:-1], self.defines.get(expr[2:-1], '')))
+        if expr.startswith('"') and expr.endswith('"'):
+            return expr[1:-1]
+        if expr in self.vars:
+            return str(self.vars[expr])
+        return expr
+
+    def _eval_arith(self, expr):
+        expr = expr.strip()
+        for op in ['+', '-', '*', '/']:
+            idx = expr.rfind(op)
+            if idx > 0:
+                left = self._eval_arith(expr[:idx].strip())
+                right = self._eval_arith(expr[idx + 1:].strip())
+                try:
+                    l, r = float(left), float(right)
+                    if op == '+':
+                        return str(int(l + r))
+                    if op == '-':
+                        return str(int(l - r))
+                    if op == '*':
+                        return str(int(l * r))
+                    if op == '/':
+                        return str(int(l / r)) if r else '0'
+                except ValueError:
+                    return expr
+        return self._resolve(expr)
+
+    # -- condition evaluation -----------------------------------------------
+
+    def eval_condition(self, expr):
+        expr = expr.strip()
+        if not expr:
+            return False
+        up = expr.upper()
+        if up == '$_CAPSLOCK_ON':
+            return self._capslock
+        if up == '$_NUMLOCK_ON':
+            return self._numlock
+        if up == '$_SCROLLLOCK_ON':
+            return self._scrolllock
+        if up.startswith('NOT '):
+            return not self.eval_condition(expr[4:])
+        for op_str in (' OR ', ' or '):
+            idx = expr.find(op_str)
+            if idx >= 0:
+                return self.eval_condition(expr[:idx]) or self.eval_condition(expr[idx + len(op_str):])
+        for op_str in (' AND ', ' and '):
+            idx = expr.find(op_str)
+            if idx >= 0:
+                return self.eval_condition(expr[:idx]) and self.eval_condition(expr[idx + len(op_str):])
+        for op in ('-eq', '-ne', '-lt', '-gt', '-le', '-ge', '==', '!=', '<>', '<', '>', '<=', '>='):
+            idx = expr.find(op)
+            if idx > 0:
+                left = self._eval_arith(expr[:idx])
+                right = self._eval_arith(expr[idx + len(op):])
+                try:
+                    ln, rn = float(left), float(right)
+                except ValueError:
+                    ln, rn = left.strip('"'), right.strip('"')
+                if op in ('-eq', '=='):
+                    return ln == rn
+                if op in ('-ne', '!=', '<>'):
+                    return ln != rn
+                if op in ('-lt', '<'):
+                    return ln < rn
+                if op in ('-gt', '>'):
+                    return ln > rn
+                if op in ('-le', '<='):
+                    return ln <= rn
+                if op in ('-ge', '>='):
+                    return ln >= rn
+        val = self._resolve(expr)
+        return val not in ('0', 'false', 'False', '', 'None')
+
+    # -- skip state ---------------------------------------------------------
+
+    @property
+    def should_skip(self):
+        if self.if_stack and self.if_stack[-1][2]:
+            return True
+        if self.while_stack and not self.while_stack[-1][1]:
+            return True
+        return False
+
+    # -- pre-processing (DEFINE / FUNCTION / EXTENSION) ---------------------
+
+    def preprocess(self, lines):
+        i = 0
+        out = []
+        while i < len(lines):
+            raw = lines[i]
+            line = raw.strip()
+            up = line.upper()
+            if up.startswith('DEFINE '):
+                parts = line.split(None, 2)
+                self.defines[parts[1]] = parts[2] if len(parts) >= 3 else ''
+                i += 1
+                continue
+            if up.startswith('FUNCTION '):
+                fname = line.split(None, 1)[1].strip()
+                body = []
+                i += 1
+                depth = 1
+                while i < len(lines):
+                    l = lines[i].strip()
+                    lu = l.upper()
+                    if lu.startswith('FUNCTION '):
+                        depth += 1
+                    elif lu == 'END_FUNCTION':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    body.append(lines[i])
+                    i += 1
+                self.functions[fname.upper()] = body
+                i += 1
+                continue
+            if up.startswith('EXTENSION '):
+                ename = line.split(None, 1)[1].strip().upper()
+                body = []
+                i += 1
+                depth = 1
+                while i < len(lines):
+                    l = lines[i].strip()
+                    lu = l.upper()
+                    if lu.startswith('EXTENSION '):
+                        depth += 1
+                    elif lu == 'END_EXTENSION':
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    body.append(lines[i])
+                    i += 1
+                self.extensions[ename] = body
+                i += 1
+                continue
+            out.append(raw)
+            i += 1
+        return out
+
+    # -- single-line execution ----------------------------------------------
+
+    def execute_line(self, line, line_idx=0):
+        line = self.substitute(line)
+        line = line.lstrip().rstrip()
+        if not line:
+            return
+        parts = line.split(' ', 1)
+        cmd = parts[0].upper()
+        instr = parts[1] if len(parts) > 1 else ''
+        instr_stripped = instr.strip()
+
+        # ---- IF / ELIF / ELSE / END_IF ----
+        if cmd == 'IF':
+            cond = self.eval_condition(instr)
+            self.if_stack.append(('if', cond, not cond))
+            return
+        if cmd in ('ELIF', 'ELSE IF'):
+            if not self.if_stack:
+                return
+            _t, executed, skipping = self.if_stack[-1]
+            if executed:
+                self.if_stack[-1] = ('if', True, True)
+                return
+            if skipping:
+                cond = self.eval_condition(instr)
+                self.if_stack[-1] = ('if', cond, not cond)
+                return
+            self.if_stack[-1] = ('if', True, True)
+            return
+        if cmd == 'ELSE':
+            if not self.if_stack:
+                return
+            _t, executed, skipping = self.if_stack[-1]
+            if executed:
+                self.if_stack[-1] = ('if', True, True)
+                return
+            if skipping:
+                self.if_stack[-1] = ('if', True, False)
+                return
+            self.if_stack[-1] = ('if', True, True)
+            return
+        if cmd == 'END_IF':
+            if self.if_stack:
+                self.if_stack.pop()
+            return
+
+        # ---- WHILE / END_WHILE / BREAK / CONTINUE ----
+        if cmd == 'WHILE':
+            if self.while_stack and self.while_stack[-1][2] == line_idx:
+                cond = self.eval_condition(instr)
+                if not cond:
+                    self.while_stack[-1] = ('while', False, line_idx)
+                return
+            if self.should_skip:
+                self.while_stack.append(('while', False, line_idx))
+                return
+            cond = self.eval_condition(instr)
+            self.while_stack.append(('while', cond, line_idx))
+            return
+        if cmd == 'END_WHILE':
+            if self.while_stack:
+                _t, active, start = self.while_stack[-1]
+                if active:
+                    self._jump_to = start
+                else:
+                    self.while_stack.pop()
+            return
+        if cmd == 'BREAK':
+            if self.while_stack:
+                _t, _a, start = self.while_stack[-1]
+                self.while_stack[-1] = ('while', False, start)
+                self._break_pending = True
+            return
+        if cmd == 'CONTINUE':
+            if self.while_stack:
+                _t, active, start = self.while_stack[-1]
+                if active:
+                    self._jump_to = start
+            return
+
+        # ---- skip gate ----
+        if self.should_skip:
+            return
+
+        # ---- core DS1 commands ----
+        if cmd == 'REM' or cmd.startswith('REM'):
+            return
+        if cmd in ('DEFAULT_DELAY', 'DEFAULTDELAY'):
+            try:
+                self.default_delay = int(instr)
+            except ValueError:
+                pass
+            return
+        if cmd in ('REPEAT', 'REPLAY'):
+            try:
+                cnt = int(instr)
+            except ValueError:
+                cnt = 1
+            for _ in range(cnt):
+                self._fire(self.last_cmd, self.last_instruction)
+            return
+
+        # ---- DEFINE (already collected) ----
+        if cmd == 'DEFINE':
+            return
+
+        # ---- VAR / CONST ----
+        if cmd in ('VAR', 'CONST'):
+            eq = instr.find('=')
+            if eq > 0:
+                name = instr[:eq].strip()
+                val = self._eval_arith(instr[eq + 1:])
+                self.vars[name] = val
+            return
+
+        # ---- STRING / STRINGLN ----
+        if cmd in ('STRING', 'STRINGLN'):
+            for ch in instr:
+                if ch in self.lang:
+                    el = [int(x, 16) for x in self.lang[ch].split(',')]
+                    while len(el) < 8:
+                        el.append(0)
+                    hidg_write(el)
+            if cmd == 'STRINGLN':
+                self._fire_key('ENTER')
+            self.last_cmd = cmd
+            self.last_instruction = instr
+            return
+
+        # ---- DELAY ----
+        if cmd == 'DELAY':
+            try:
+                time.sleep(0.001 * int(instr))
+            except ValueError:
+                pass
+            return
+
+        # ---- FUNCTION / CALL / RETURN ----
+        if cmd == 'FUNCTION':
+            return
+        if cmd == 'END_FUNCTION':
+            if self.call_stack:
+                self.call_stack.pop()
+            return
+        if cmd == 'RETURN':
+            if self.call_stack:
+                self.call_stack.pop()
+            return
+        if cmd == 'CALL':
+            target = instr_stripped.upper()
+            if target in self.functions:
+                self.call_stack.append((self.functions[target][:], 0))
+            return
+
+        # ---- EXTENSION (execute body) ----
+        if cmd in self.extensions:
+            saved = self.running
+            for ln in self.extensions[cmd]:
+                if not self.running:
+                    break
+                self.execute_line(ln)
+            self.running = saved
+            return
+        if cmd == 'END_EXTENSION':
+            return
+
+        # ---- IF_DEFINED_TRUE / DELAY_IF_DEFINED ----
+        if cmd == 'IF_DEFINED_TRUE':
+            cond = instr_stripped in self.defines and self.defines[instr_stripped] != ''
+            self.if_stack.append(('if', cond, not cond))
+            return
+        if cmd == 'DELAY_IF_DEFINED':
+            if instr_stripped in self.defines:
+                try:
+                    time.sleep(0.001 * int(self.defines[instr_stripped]))
+                except ValueError:
+                    pass
+            return
+
+        # ---- LED / DEFAULTLED / ATTACKMODE ----
+        if cmd in ('LED', 'DEFAULTLED', 'ATTACKMODE'):
+            return
+
+        # ---- WAIT_FOR_BUTTON_PRESS ----
+        if cmd == 'WAIT_FOR_BUTTON_PRESS':
+            t0 = time.time()
+            while time.time() - t0 < 60:
+                try:
+                    with open('/run/bunny/input.fifo', 'r') as f:
+                        ev = f.readline().strip()
+                        if ev:
+                            break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            return
+
+        # ---- STOP / HIDE ----
+        if cmd in ('STOP_PAYLOAD', 'HIDE_PAYLOAD'):
+            self.running = False
+            return
+
+        # ---- SAVE / RESTORE keyboard lock state ----
+        if cmd == 'SAVE_HOST_KEYBOARD_LOCK_STATE':
+            return
+        if cmd == 'RESTORE_HOST_KEYBOARD_LOCK_STATE':
+            return
+
+        # ---- INJECT_MOD / RELEASE_MOD ----
+        if cmd == 'INJECT_MOD':
+            if instr_stripped.upper() in self.lang:
+                el = [int(x, 16) for x in self.lang[instr_stripped.upper()].split(',')]
+                while len(el) < 8:
+                    el.append(0)
+                hidg_write(el, release=False)
+            return
+        if cmd == 'RELEASE_MOD':
+            hidg_write([0, 0, 0, 0, 0, 0, 0, 0])
+            return
+
+        # ---- EXFIL ----
+        if cmd == 'EXFIL':
+            return
+
+        # ---- ALTCODE / KEYCODE ----
+        if cmd == 'ALTCODE':
+            write_altcode([int(c) for c in instr])
+            return
+        if cmd == 'KEYCODE':
+            for kc in instr.split(' '):
+                el = [int(x, 16) for x in kc.split(',')]
+                while len(el) < 8:
+                    el.append(0)
+                hidg_write(el)
+            return
+
+        # ---- modifier / special keys via language file ----
+        if cmd in self.lang:
+            el = [int(x, 16) for x in self.lang[cmd].split(',')]
+            while len(el) < 8:
+                el.append(0)
+            if instr_stripped and instr_stripped in self.lang:
+                param = [int(x, 16) for x in self.lang[instr_stripped].split(',')]
+                el[0] |= param[0]
+                el[2] |= param[2]
+            hidg_write(el)
+            self.last_cmd = cmd
+            self.last_instruction = instr
+            return
+
+        print("  [!] Unknown command: {0}".format(cmd))
+
+    # -- fire helper (for REPEAT) -------------------------------------------
+
+    def _fire(self, cmd, instr):
+        if cmd == 'STRING':
+            for ch in instr:
+                if ch in self.lang:
+                    el = [int(x, 16) for x in self.lang[ch].split(',')]
+                    while len(el) < 8:
+                        el.append(0)
+                    hidg_write(el)
+        elif cmd == 'STRINGLN':
+            for ch in instr:
+                if ch in self.lang:
+                    el = [int(x, 16) for x in self.lang[ch].split(',')]
+                    while len(el) < 8:
+                        el.append(0)
+                    hidg_write(el)
+            self._fire_key('ENTER')
+        elif cmd == 'DELAY':
+            try:
+                time.sleep(0.001 * int(instr))
+            except ValueError:
+                pass
+        elif cmd in self.lang:
+            el = [int(x, 16) for x in self.lang[cmd].split(',')]
+            while len(el) < 8:
+                el.append(0)
+            if instr and instr in self.lang:
+                param = [int(x, 16) for x in self.lang[instr].split(',')]
+                el[0] |= param[0]
+                el[2] |= param[2]
+            hidg_write(el)
+
+    def _fire_key(self, key):
+        if key in self.lang:
+            el = [int(x, 16) for x in self.lang[key].split(',')]
+            while len(el) < 8:
+                el.append(0)
+            hidg_write(el)
+
+    # -- payload execution --------------------------------------------------
+
+    def run_payload(self, filename):
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+        except Exception as exc:
+            print("  [!] Unable to open: {0}: {1}".format(filename, exc))
+            return
+        lines = self.preprocess(lines)
+        lines = [self.substitute(l.rstrip()) for l in lines]
+        i = 0
+        self._jump_to = None
+        self._break_pending = False
+        while i < len(lines) and self.running:
+            if self._jump_to is not None:
+                i = self._jump_to
+                self._jump_to = None
+                continue
+            if self._break_pending:
+                self._break_pending = False
+                depth = 0
+                while i < len(lines):
+                    lu = lines[i].strip().upper()
+                    if lu.startswith('WHILE '):
+                        depth += 1
+                    elif lu == 'END_WHILE':
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    i += 1
+                if self.while_stack:
+                    self.while_stack.pop()
+                i += 1
+                continue
+            if self.call_stack:
+                body, pc = self.call_stack[-1]
+                if pc < len(body):
+                    self.call_stack[-1] = (body, pc + 1)
+                    self.execute_line(body[pc])
+                else:
+                    self.call_stack.pop()
+                i += 1
+                continue
+            ln = lines[i]
+            if ln.strip():
+                self.execute_line(ln, i)
+                if self.while_stack:
+                    _t, active, start = self.while_stack[-1]
+                    if active and start == -1:
+                        self.while_stack[-1] = ('while', True, i)
+            i += 1
+            if self.default_delay and not self.should_skip and self.running:
+                time.sleep(0.001 * self.default_delay)
+
+    def run_lines(self, text):
+        lines = text.replace("\r", "").split('\n')
+        lines = self.preprocess(lines)
+        lines = [self.substitute(l.rstrip()) for l in lines]
+        i = 0
+        self._jump_to = None
+        self._break_pending = False
+        while i < len(lines) and self.running:
+            if self._jump_to is not None:
+                i = self._jump_to
+                self._jump_to = None
+                continue
+            if self._break_pending:
+                self._break_pending = False
+                depth = 0
+                while i < len(lines):
+                    lu = lines[i].strip().upper()
+                    if lu.startswith('WHILE '):
+                        depth += 1
+                    elif lu == 'END_WHILE':
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    i += 1
+                if self.while_stack:
+                    self.while_stack.pop()
+                i += 1
+                continue
+            if self.call_stack:
+                body, pc = self.call_stack[-1]
+                if pc < len(body):
+                    self.call_stack[-1] = (body, pc + 1)
+                    self.execute_line(body[pc])
+                else:
+                    self.call_stack.pop()
+                i += 1
+                continue
+            ln = lines[i]
+            if ln.strip():
+                self.execute_line(ln, i)
+            i += 1
+            if self.default_delay and not self.should_skip and self.running:
+                time.sleep(0.001 * self.default_delay)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def run_ducky_line(context, line, lang_file):
+    vm = DuckyVM(lang_file)
+    vm.default_delay = context[3]
+    vm.last_cmd = context[1]
+    vm.last_instruction = context[2]
+    vm.execute_line(line)
+    return ((1, ''), vm.last_cmd, vm.last_instruction, vm.default_delay)
+
+
+def run_ducky_payload(duck_filename, lang_file):
+    vm = DuckyVM(lang_file)
+    vm.run_payload(duck_filename)
+
+
+def run_script(input_line, duck_lang):
+    language_dict = os.path.join(LANG_DIR, '{0}.json'.format(duck_lang))
+    with open(language_dict, encoding='utf-8') as f:
+        lang_file = json.load(f)
+    vm = DuckyVM(lang_file)
+    fullpath = "/root/udisk/payloads/"
+    input_line = input_line.replace("\r", "")
+    line = input_line
+    if len(line) > 0:
+        if not line.startswith("STRING") and line.rstrip()[-4:] == '.txt':
+            filename = line.rstrip()
+            vm.run_payload(fullpath + filename)
+        else:
+            vm.run_lines(line)
+
+
+def list_languages():
+    languages = []
+    for filename in os.listdir(LANG_DIR):
+        if filename.endswith('.json'):
+            languages.append(filename)
+    return languages
+
+
+if __name__ == "__main__":
+    language = os.getenv("DUCKY_LANG", default="us").lower()
+    if "{0}.json".format(language) not in list_languages():
+        print("[!] Language '{0}' is not supported at this time.".format(language))
+        print("[+] Supported Languages")
+        for lang in list_languages():
+            print("  [-] {0}".format(lang.split('.')[0]))
+        sys.exit()
+    input_line = "\n".join(sys.argv[1:])
+    run_script(input_line, language)

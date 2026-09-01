@@ -1,0 +1,47 @@
+#!/bin/bash
+# hunter (STORAGE, paranoia mode) - wait for files dropped onto the BashBunny
+# drive and grep them for interesting values. Hits -> loot/marks.txt.
+# Drop a .txt/.log/.csv/.json/... with the marked keywords and watch it flag.
+# Authorized tests only.
+LED SETUP
+ATTACKMODE STORAGE
+sleep 2
+mkdir -p /root/udisk/loot
+PATTERNS="${HUNT_PATTERN:-password/passwd/seed/secret/private.key/wallet/mnemonic/email/ssn/credit-?card}"
+IGNORE="^/root/udisk/(payloads|loot|tools|docs|languages)/|/\.menucfg$|/\.lastswitch$|/config\.txt$|/version\.txt$|/win7-win8-cdc-acm\.inf$|/keylogger\.ps1$"
+LED STAGE2
+echo "[*] hunter: watching the drive for dropped files (45s) ..."
+found=0
+for i in $(seq 45); do
+    sleep 1
+    while IFS= read -r f; do
+        echo "$f" | grep -qE "$IGNORE" && continue
+        case "$f" in
+            *.txt|*.log|*.csv|*.json|*.cfg|*.ini|*.conf|*.md|*.rtf|*.xml) ;;
+            *) continue ;;
+        esac
+        # only look at files touched in the last ~6s
+        [ -n "$(stat -c %Y "$f" 2>/dev/null)" ] || continue
+        [ "$(stat -c %Y "$f")" -ge "$(( $(date +%s) - 6 ))" ] || continue
+        hits=$(grep -iE "$PATTERNS" "$f" 2>/dev/null | head -n 3)
+        if [ -n "$hits" ]; then
+            found=1
+            {
+                echo "== $f =="
+                echo "$hits"
+            } >> /root/udisk/loot/marks.txt
+            echo "[+] marked: $f"
+        fi
+    done < <(find /root/udisk -maxdepth 3 -type f 2>/dev/null)
+done
+chmod a+r /root/udisk/loot/marks.txt 2>/dev/null
+if [ "$found" = "1" ]; then
+    echo "[*] hunter found hits -> loot/marks.txt"
+    LED R SINGLE; sleep 1
+else
+    echo "[*] hunter done: no marks"
+    LED B SINGLE; sleep 1
+fi
+LED OFF
+LED FINISH
+exit 0

@@ -1,0 +1,23 @@
+[Unit]
+Description=PiBunny UI (Waveshare 1.3inch LCD status/menu)
+Before=bunny.service
+# Start as early as the UI can run - right after the basic phase (rootfs +
+# udev present), well before multi-user services (NetworkManager, etc.) so
+# the Arasaka splash appears as soon as possible after the kernel boots.
+After=local-fs.target systemd-udevd.service
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/bunny/ui
+# systemd does NOT pass Exec*= lines through a shell, so a bare
+# "date ... >> file" breaks (”extra operand '>>'”). Use a script instead.
+ExecStartPre=/usr/local/bin/bunny-ui-pre
+ExecStart=/usr/bin/python3 /usr/local/bunny/ui/ui.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
+
+[Install]
+WantedBy=basic.target
