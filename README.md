@@ -1,5 +1,8 @@
 # PiBunny (pibash) — Bash Bunny firmware ported to a Raspberry Pi Zero 2 W
 
+<img width="1920" height="1280" alt="pibash_root_final" src="https://github.com/user-attachments/assets/def8889a-5953-43ff-a45a-92f38acab226" />
+
+
 > 🐰 A working, fully-open port of the **Hak5 Bash Bunny MK2 firmware (v1.7)**
 > onto a **Raspberry Pi Zero 2 W** + **Waveshare 1.3" LCD HAT** (ST7789 240x240,
 > joystick + 3 keys) that acts as both the status "LED" and the control UI.
